@@ -1,0 +1,5 @@
+300W-LP: https://drive.google.com/file/d/0B7OEHD3T4eCkVGs0TkhUWFN6N1k/view?resourcekey=0-WT5tO4TOCbNZY6r6z6WmOA
+
+
+
+cod to paper 6D: https://github.com/Redhwan-A/6DoFHPE/blob/main/datasets.py
