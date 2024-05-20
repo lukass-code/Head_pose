@@ -1,0 +1,158 @@
+import torch
+from torchvision.models import resnet50
+import torch.nn as nn
+from torchvision import transforms
+from PIL import Image
+import cv2
+import numpy as np
+import os
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+import matplotlib.pyplot as plt
+import matplotlib.image as mpimg
+import cv2
+
+# Image processing using facenet-pytorch https://github.com/timesler/facenet-pytorch?tab=readme-ov-file#quick-start
+# https://github.com/timesler/facenet-pytorch/tree/master
+from facenet_pytorch import MTCNN, InceptionResnetV1
+
+#IMPORTANT if margin is not used then the face itself is resized to 450 pixels (images become much different than in training) 
+mtcnn = MTCNN(image_size=450, margin=350) #device=device
+
+# Define model architecture
+class HeadPoseModel_Complex(nn.Module):
+    def __init__(self):
+        super(HeadPoseModel_Complex, self).__init__()
+        self.resnet50 = resnet50(pretrained=True)
+        num_features = self.resnet50.fc.in_features
+        self.resnet50.fc = nn.Sequential(
+            nn.Linear(num_features, 512),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(256, 3)  # Output 3 values: roll, pitch, yaw
+        )
+
+    def forward(self, x):
+        return self.resnet50(x)
+    
+# Load trained model
+model = HeadPoseModel_Complex()
+local_model_path = "C:/Users/vaval/OneDrive/Documents/Master/MUAR/Advanced Computer Vision/Short Project/Models/model_4/model_checkpoint.pth"
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+model.load_state_dict(torch.load(local_model_path,map_location=device))
+model.eval()
+model.to('cuda' if torch.cuda.is_available() else 'cpu')
+
+# Define the transformation for the input images
+transform = transforms.Compose([
+    transforms.ToTensor(),
+])
+
+def get_video_frames(video_path):
+    cap = cv2.VideoCapture(video_path)  # Change to a video file path if needed
+    frames = []
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+        
+        #Save frame
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)  # Convert BGR to RGB
+        frames.append(frame)
+    cap.release()
+    return frames, fps
+
+def predict_head_orientation(img_tensor):
+    # Preprocess the frame
+    #input_image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    #input_tensor = transform(input_image).unsqueeze(0).to('cuda' if torch.cuda.is_available() else 'cpu')
+    input_tensor = img_tensor.unsqueeze(0).to(device)
+    with torch.no_grad():
+        prediction = model(input_tensor)
+    
+    # Convert prediction to numpy (move to cpu because numpy does not support tensors in gpu)
+    prediction = prediction.cpu().numpy().flatten()
+    return prediction
+
+def draw_coordinate_system(frame,predictions_np):
+    h, w, _ = frame.shape
+    center = (w // 2, h // 2)
+    
+    # Length of the axis lines
+    axis_length = 100
+    
+    #Get orientation
+    roll = predictions_np[0]
+    pitch = predictions_np[1]
+    yaw = predictions_np[2]
+
+    # Convert angles from radians to degrees
+    yaw = yaw * 180 / np.pi
+    pitch = pitch * 180 / np.pi
+    roll = roll * 180 / np.pi
+    
+    # Calculate end points of the axis lines
+    roll_matrix = cv2.getRotationMatrix2D(center, roll, 1)
+    pitch_matrix = cv2.getRotationMatrix2D(center, pitch, 1)
+    yaw_matrix = cv2.getRotationMatrix2D(center, -yaw, 1)
+    
+    # Draw roll axis (red)
+    roll_end_point = np.dot(roll_matrix, np.array([center[0] - axis_length, center[1], 1])).astype(int)
+    cv2.line(frame, center, (roll_end_point[0], roll_end_point[1]), (0, 0, 255), 2)
+
+    # Draw pitch axis (green)
+    pitch_end_point = np.dot(pitch_matrix, np.array([center[0] + axis_length, center[1], 1])).astype(int)
+    cv2.line(frame, center, (pitch_end_point[0], pitch_end_point[1]), (0, 255, 0), 2)
+
+    # Draw yaw axis (blue)
+    yaw_end_point = np.dot(yaw_matrix, np.array([center[0], center[1] - axis_length, 1])).astype(int)
+    cv2.line(frame, center, (yaw_end_point[0], yaw_end_point[1]), (255, 0, 0), 2)
+
+    return frame
+
+# Get video frames from the introduced path
+video_path = "C:/Users/vaval/OneDrive/Documents/Master/MUAR/Advanced Computer Vision/Short Project/DataSets/Head_Pose_Database_UPNA/User_10/user_10_video_04.mp4"
+video_frames,fps = get_video_frames(video_path)
+
+delay = int(1000 / fps)  # Delay between frames in milliseconds
+predictions = []
+counter = 0
+for frame in video_frames:
+    counter +=1
+    if counter == 20:
+        img_cropped = mtcnn(frame,save_path="C:/Users/vaval/OneDrive/Documents/Master/MUAR/Advanced Computer Vision/Short Project/output.jpg")
+    else:
+        img_cropped = mtcnn(frame)
+    orientation = predict_head_orientation(img_cropped)
+    predictions.append(orientation)
+
+# Convert list of predictions to a NumPy array for plotting
+predictions_np = np.array(predictions)
+
+
+#Show video with coordinate frame 
+counter = 0
+for frame in video_frames:
+    # Draw the coordinate system on the original frame
+    frame_with_axes = draw_coordinate_system(frame, predictions_np[counter,:])
+    
+    # Display the frame with the drawn axes
+    cv2.imshow('Head Pose Estimation', frame_with_axes)
+    counter +=1
+    if cv2.waitKey(delay) & 0xFF == ord('q'):
+        break
+
+
+# Plot the results
+plt.figure(figsize=(15, 5))
+plt.plot(predictions_np[:, 0], label='Roll', color='r')
+plt.plot(predictions_np[:, 1], label='Pitch', color='g')
+plt.plot(predictions_np[:, 2], label='Yaw', color='b')
+plt.xlabel('Frame')
+plt.ylabel('Angle')
+plt.legend()
+plt.title('Head Orientation over Video Frames')
+plt.show()
